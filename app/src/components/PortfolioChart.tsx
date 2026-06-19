@@ -50,6 +50,35 @@ export function PortfolioChart({ pods, visible, height = 420 }: Props) {
       ? new Date(v).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
       : new Date(v).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
 
+  // Y-axis domain: enforce a minimum $5k spread so small moves don't expand
+  // to fill the full height with micro-increments. Centers the line when data
+  // hasn't moved much; adds 8% padding when the natural range is larger.
+  const yDomain = useMemo((): [number, number] | ['auto', 'auto'] => {
+    const vals = data.flatMap((row) =>
+      shown.map((p) => row[p.id]).filter((v): v is number => typeof v === 'number'),
+    )
+    if (!vals.length) return ['auto', 'auto']
+    const dataMin = Math.min(...vals)
+    const dataMax = Math.max(...vals)
+    const dataRange = dataMax - dataMin
+    const MIN_RANGE = 5_000 // ~$1k per rung with 5 ticks
+    if (dataRange >= MIN_RANGE) {
+      const pad = dataRange * 0.08
+      return [dataMin - pad, dataMax + pad]
+    }
+    const mid = (dataMin + dataMax) / 2
+    return [mid - MIN_RANGE / 2, mid + MIN_RANGE / 2]
+  }, [data, shown])
+
+  // Tick label precision adapts to how wide the domain is.
+  const yTickFmt = useMemo(() => {
+    if (yDomain[0] === 'auto') return (v: number) => `$${(v / 1_000).toFixed(0)}k`
+    const range = (yDomain[1] as number) - (yDomain[0] as number)
+    if (range > 50_000) return (v: number) => `$${(v / 1_000).toFixed(0)}k`
+    if (range > 5_000)  return (v: number) => `$${(v / 1_000).toFixed(1)}k`
+    return                     (v: number) => `$${(v / 1_000).toFixed(2)}k`
+  }, [yDomain])
+
   return (
     <div className="card-soft bg-panel">
       <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 border-b border-line px-4 py-2.5">
@@ -75,11 +104,12 @@ export function PortfolioChart({ pods, visible, height = 420 }: Props) {
               minTickGap={48}
             />
             <YAxis
-              tickFormatter={(v) => `$${(v / 1000).toFixed(0)}k`}
+              tickFormatter={yTickFmt}
               tick={{ fontSize: 10, fill: '#6b6658', fontFamily: 'monospace' }}
               stroke="#1a1916"
-              width={48}
-              domain={['auto', 'auto']}
+              width={56}
+              tickCount={5}
+              domain={yDomain}
             />
             <Tooltip
               contentStyle={{

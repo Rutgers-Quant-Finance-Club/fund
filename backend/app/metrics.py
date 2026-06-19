@@ -36,6 +36,13 @@ def _volatility(returns: pd.Series) -> float:
     return round(float(returns.std() * np.sqrt(252)), 4)
 
 
+def _sanitize(v):
+    """Replace nan/inf with None so the dict is always JSON-safe."""
+    if isinstance(v, float) and (np.isnan(v) or np.isinf(v)):
+        return None
+    return v
+
+
 def compute(nav_rows: list, rf: float = 0.05, trade_count: int = 0) -> dict | None:
     """nav_rows: list of {date, nav, daily_return}. Returns a metrics dict."""
     if not nav_rows:
@@ -52,14 +59,14 @@ def compute(nav_rows: list, rf: float = 0.05, trade_count: int = 0) -> dict | No
     var_95 = float(ret.quantile(0.05)) if n else None
     win_rate = float((ret > 0).mean()) if n else None
 
-    return {
+    raw = {
         "as_of_date":        nav_rows[-1]["date"],
         "cumulative_return": round(cum_return, 6),
         "annualized_return": round(ann_return, 6),
         "volatility":        _volatility(ret),
         "sharpe":            _sharpe(ret, rf),
         "sortino":           _sortino(ret, rf),
-        "beta":              None,   # requires benchmark series; left null
+        "beta":              None,
         "alpha":             None,
         "max_drawdown":      max_dd,
         "calmar":            round(calmar, 4) if calmar is not None else None,
@@ -67,3 +74,4 @@ def compute(nav_rows: list, rf: float = 0.05, trade_count: int = 0) -> dict | No
         "win_rate":          round(win_rate, 4) if win_rate is not None else None,
         "trade_count":       int(trade_count),
     }
+    return {k: _sanitize(v) for k, v in raw.items()}

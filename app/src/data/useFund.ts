@@ -85,8 +85,8 @@ interface NavSeriesPod {
 }
 
 const fetchLive = () => getJSON<{ pods: LiveSnapshot[] }>('/public/live').then((d) => d?.pods ?? null)
-const fetchNavSeries = () =>
-  getJSON<{ pods: NavSeriesPod[] }>('/public/nav-series?minutes=390').then((d) => d?.pods ?? null)
+const fetchNavSeries = (minutes: number) =>
+  getJSON<{ pods: NavSeriesPod[] }>(`/public/nav-series?minutes=${minutes}`).then((d) => d?.pods ?? null)
 const fetchTrades = () => getJSON<{ trades: LiveTrade[] }>('/public/trades?limit=200').then((d) => d?.trades ?? null)
 const fetchTicker = () =>
   getJSON<{ items: { symbol: string; price: number; change_pct: number }[] }>('/public/ticker').then(
@@ -112,7 +112,7 @@ function mapPosition(podId: string, p: LivePosition, idx: number): Position {
     realizedPnl: p.realized_pnl ?? 0,
     totalPnl: p.total_pnl ?? p.unrealized_pnl ?? 0,
     trader: '',
-    openedAt: new Date().toISOString(),
+    openedAt: '',  // enriched below from trade history
   }
 }
 
@@ -241,6 +241,16 @@ function assemble(
       pos.trader = roster[idx % Math.max(1, roster.length)]?.name ?? ''
     })
 
+    // enrich openedAt: earliest buy trade for this symbol in this pod
+    const firstBuyBySymbol = new Map<string, string>()
+    podTrades
+      .filter((t) => t.side === 'buy')
+      .sort((a, b) => +new Date(a.executedAt) - +new Date(b.executedAt))
+      .forEach((t) => { if (!firstBuyBySymbol.has(t.symbol)) firstBuyBySymbol.set(t.symbol, t.executedAt) })
+    pod.positions.forEach((pos) => {
+      pos.openedAt = firstBuyBySymbol.get(pos.symbol) ?? ''
+    })
+
     roster.forEach((m, mi) => {
       const mineTrades = podTrades.filter((t) => t.traderId === m.id)
       const realizedList = mineTrades.map((t) => t.realizedPnl).filter((v): v is number => v != null)
@@ -278,16 +288,23 @@ function assemble(
   }
 }
 
-export function useFund(): FundData {
+// minutes=null means "use daily history from snapshot, skip the 1-min bars API"
+export function useFund(minutes: number | null = 390): FundData {
   const { data: live } = useQuery({ queryKey: ['fund-live'], queryFn: fetchLive, refetchInterval: 5_000, staleTime: 2_000 })
   const { data: liveTrades } = useQuery({ queryKey: ['fund-trades'], queryFn: fetchTrades, refetchInterval: 8_000, staleTime: 4_000 })
   const { data: ticker } = useQuery({ queryKey: ['fund-ticker'], queryFn: fetchTicker, refetchInterval: 15_000, staleTime: 10_000 })
-  // 1Min market bars only change once a minute
-  const { data: navSeries } = useQuery({ queryKey: ['fund-nav'], queryFn: fetchNavSeries, refetchInterval: 60_000, staleTime: 30_000 })
+  // 1Min market bars only change once a minute; null minutes = skip fetch, use daily history
+  const { data: navSeries } = useQuery({
+    queryKey: ['fund-nav', minutes],
+    queryFn: () => fetchNavSeries(minutes!),
+    enabled: minutes !== null,
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  })
 
   return useMemo(
-    () => assemble(live ?? null, liveTrades ?? null, ticker ?? null, navSeries ?? null),
-    [live, liveTrades, ticker, navSeries],
+    () => assemble(live ?? null, liveTrades ?? null, ticker ?? null, minutes !== null ? (navSeries ?? null) : null),
+    [live, liveTrades, ticker, navSeries, minutes],
   )
 }
 

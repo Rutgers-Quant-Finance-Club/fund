@@ -256,4 +256,4 @@ def minute_nav_series(
 
 
 def iso_now() -> str:
-    return datetime.utcnow().isoformat() + "Z"
+    return datetime.now(timezone.utc).isoformat()

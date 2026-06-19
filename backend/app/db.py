@@ -5,7 +5,7 @@ directly; the backend is the only writer.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from supabase import create_client, Client
 
@@ -181,13 +181,19 @@ def get_nav_series(pod_id: str, daily_limit: int = 365, mark_limit: int = 1000) 
     return series
 
 
-def list_pod_trades_for_marking(pod_id: str) -> list[dict]:
-    """Trades ordered oldest-first for deriving public mark-to-market positions."""
+def list_pod_trades_for_marking(pod_id: str, days: int = 730) -> list[dict]:
+    """Trades ordered oldest-first for deriving public mark-to-market positions.
+
+    Defaults to 2 years of history — enough for any reasonable position replay
+    without pulling the entire lifetime of a busy pod on every snapshot.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
     try:
         res = (
             sb().table("trades")
             .select("id, pod_id, trader_id, alpaca_order_id, symbol, side, quantity, price, notional, filled_qty, limit_price, asset_class, status, executed_at, created_at, multiplier, instrument_type, fees, realized_pnl, filled_at")
             .eq("pod_id", pod_id)
+            .gte("executed_at", since)
             .order("executed_at", desc=False)
             .execute()
         )
@@ -196,6 +202,7 @@ def list_pod_trades_for_marking(pod_id: str) -> list[dict]:
             sb().table("trades")
             .select("id, pod_id, trader_id, alpaca_order_id, symbol, side, quantity, price, notional, filled_qty, limit_price, asset_class, status, executed_at, created_at")
             .eq("pod_id", pod_id)
+            .gte("executed_at", since)
             .order("executed_at", desc=False)
             .execute()
         )
@@ -270,9 +277,15 @@ def replace_position_marks(pod_id: str, rows: list[dict]) -> None:
         return
 
 
+_PORTFOLIO_MARKS_RETENTION_DAYS = 2
+
+
 def insert_portfolio_mark(pod_id: str, row: dict) -> None:
     try:
         sb().table("portfolio_marks").insert({"pod_id": pod_id, **row}).execute()
+        # Trim marks older than the retention window to keep the table bounded.
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=_PORTFOLIO_MARKS_RETENTION_DAYS)).isoformat()
+        sb().table("portfolio_marks").delete().eq("pod_id", pod_id).lt("marked_at", cutoff).execute()
     except Exception:
         return
 

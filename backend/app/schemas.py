@@ -1,18 +1,33 @@
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 
 class OrderRequest(BaseModel):
     pod_id: str
     symbol: str
-    side: str                       # "buy" | "sell"
+    side: Literal["buy", "sell"]
     qty: Optional[float] = None
     notional: Optional[float] = None
-    order_type: str = "market"      # "market" | "limit"
-    order_label: str = "market"     # what to record (market/limit/short/cover/...)
+    order_type: Literal["market", "limit"] = "market"
+    order_label: str = "market"
     limit_price: Optional[float] = None
-    time_in_force: str = "day"
+    time_in_force: Literal["day", "gtc", "ioc", "fok", "opg", "cls"] = "day"
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_uppercase(cls, v: str) -> str:
+        v = v.strip().upper()
+        if not v:
+            raise ValueError("symbol must not be empty")
+        return v
+
+    @field_validator("qty", "notional", "limit_price")
+    @classmethod
+    def must_be_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("must be positive")
+        return v
 
 
 class CancelRequest(BaseModel):

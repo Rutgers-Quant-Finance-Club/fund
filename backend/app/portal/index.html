@@ -362,7 +362,7 @@ function showTab(name) {
 }
 
 async function refreshAll() {
-  await Promise.all([loadPods(), loadTraders()]);
+  await Promise.allSettled([loadPods(), loadTraders()]);
   loadMemberships();
   loadTradeActivity();
 }

@@ -34,6 +34,27 @@ from .accounting import parse_instrument, parse_ts
 
 logger = logging.getLogger(__name__)
 
+# ── Credential + client cache ─────────────────────────────────────────────────
+# _resolve_creds is called on every Alpaca call (trading_client, data_client,
+# _alpaca_headers). Without caching this hits the DB O(N × calls/snapshot).
+# TTL of 5 minutes is safe — credentials rarely rotate, and the admin endpoint
+# calls invalidate_pod_creds_cache() when they do.
+
+_CREDS_CACHE: dict[str, tuple[str, str, float]] = {}  # pod_id -> (key, secret, expire_at)
+_CREDS_TTL = 300.0
+
+_TRADING_CLIENTS: dict[str, TradingClient] = {}  # cache key -> client
+_DATA_CLIENTS: dict[str, StockHistoricalDataClient] = {}
+
+
+def invalidate_pod_creds_cache(pod_id: str) -> None:
+    """Call after updating a pod's Alpaca credentials so the cache is flushed."""
+    _CREDS_CACHE.pop(pod_id, None)
+    # Remove any cached SDK clients that used this pod's credentials.
+    for d in (_TRADING_CLIENTS, _DATA_CLIENTS):
+        for k in [k for k in d if k.startswith(f"{pod_id}:")]:
+            d.pop(k, None)
+
 
 def _log_value(value):
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -88,12 +109,23 @@ def _position_debug(position) -> dict:
 # ── Credential resolution ────────────────────────────────────────────────────
 
 def _resolve_creds(pod_id: str):
+    now = time.time()
+    cached = _CREDS_CACHE.get(pod_id)
+    if cached and cached[2] > now:
+        return cached[0], cached[1]
+
     creds = db.get_pod_alpaca(pod_id)
     if creds and creds.get("api_key") and creds.get("api_secret"):
-        return creds["api_key"], creds["api_secret"]
+        key, secret = creds["api_key"], creds["api_secret"]
+        _CREDS_CACHE[pod_id] = (key, secret, now + _CREDS_TTL)
+        return key, secret
     s = get_settings()
     if s.alpaca_api_key and s.alpaca_api_secret:
-        return s.alpaca_api_key, s.alpaca_api_secret
+        # Env-level fallback: cache under a stable sentinel so we don't query
+        # the DB on every call when a pod has no row in pod_alpaca_credentials.
+        key, secret = s.alpaca_api_key, s.alpaca_api_secret
+        _CREDS_CACHE[pod_id] = (key, secret, now + _CREDS_TTL)
+        return key, secret
     raise HTTPException(
         status_code=400,
         detail=("Pod has no Alpaca credentials. Set them via "
@@ -103,18 +135,23 @@ def _resolve_creds(pod_id: str):
 
 def trading_client(pod_id: str) -> TradingClient:
     key, secret = _resolve_creds(pod_id)
-    settings = get_settings()
-    return TradingClient(
-        key,
-        secret,
-        paper=settings.alpaca_paper,
-        url_override=settings.alpaca_trading_base_url,
-    )
+    cache_key = f"{pod_id}:{key[:8]}"
+    if cache_key not in _TRADING_CLIENTS:
+        settings = get_settings()
+        _TRADING_CLIENTS[cache_key] = TradingClient(
+            key, secret,
+            paper=settings.alpaca_paper,
+            url_override=settings.alpaca_trading_base_url,
+        )
+    return _TRADING_CLIENTS[cache_key]
 
 
 def data_client(pod_id: str) -> StockHistoricalDataClient:
     key, secret = _resolve_creds(pod_id)
-    return StockHistoricalDataClient(key, secret)
+    cache_key = f"{pod_id}:{key[:8]}"
+    if cache_key not in _DATA_CLIENTS:
+        _DATA_CLIENTS[cache_key] = StockHistoricalDataClient(key, secret)
+    return _DATA_CLIENTS[cache_key]
 
 
 def _alpaca_headers(pod_id: str) -> dict:
@@ -294,34 +331,50 @@ def get_account(pod_id: str) -> dict:
 
 
 def get_fill_activities(pod_id: str, days: int = 90) -> list[dict]:
-    """Fetch Alpaca FILL activities, including partial fills."""
+    """Fetch Alpaca FILL activities, paginating through all results."""
     settings = get_settings()
     date = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days or 90)))).strftime("%Y-%m-%d")
-    params = urlencode({"date": date, "direction": "asc", "page_size": 100})
-    url = f"{settings.alpaca_trading_base_url.rstrip('/')}/v2/account/activities/FILL?{params}"
-    try:
-        data = _get_json(url, _alpaca_headers(pod_id))
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not fetch Alpaca fill activities: {e}")
-    if isinstance(data, dict):
-        data = data.get("activities") or data.get("data") or []
-    rows = []
-    for activity in data:
-        symbol = str(activity.get("symbol") or "").upper()
-        qty = activity.get("qty")
-        price = activity.get("price")
-        if not symbol or qty is None or price is None:
-            continue
-        rows.append({
-            "fill_id": activity.get("id"),
-            "alpaca_order_id": activity.get("order_id"),
-            "symbol": symbol,
-            "side": activity.get("side"),
-            "quantity": abs(float(qty)),
-            "price": float(price),
-            "filled_at": activity.get("transaction_time") or activity.get("date"),
-            "raw": activity,
-        })
+    base_url = settings.alpaca_trading_base_url.rstrip("/")
+    headers = _alpaca_headers(pod_id)
+    rows: list[dict] = []
+    page_token: str | None = None
+
+    while True:
+        params: dict = {"date": date, "direction": "asc", "page_size": 100}
+        if page_token:
+            params["page_token"] = page_token
+        url = f"{base_url}/v2/account/activities/FILL?{urlencode(params)}"
+        try:
+            data = _get_json(url, headers)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Could not fetch Alpaca fill activities: {e}")
+        if isinstance(data, dict):
+            data = data.get("activities") or data.get("data") or []
+        if not data:
+            break
+        for activity in data:
+            symbol = str(activity.get("symbol") or "").upper()
+            qty = activity.get("qty")
+            price = activity.get("price")
+            if not symbol or qty is None or price is None:
+                continue
+            rows.append({
+                "fill_id": activity.get("id"),
+                "alpaca_order_id": activity.get("order_id"),
+                "symbol": symbol,
+                "side": activity.get("side"),
+                "quantity": abs(float(qty)),
+                "price": float(price),
+                "filled_at": activity.get("transaction_time") or activity.get("date"),
+                "raw": activity,
+            })
+        if len(data) < 100:
+            break
+        # Alpaca paginates with the ID of the last item returned.
+        page_token = data[-1].get("id")
+        if not page_token:
+            break
+
     return rows
 
 

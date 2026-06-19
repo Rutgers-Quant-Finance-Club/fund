@@ -1,6 +1,6 @@
 import type { Pod, Position } from '@/data/types'
 import { Money, SideBadge } from './ui'
-import { formatCurrency } from '@/lib/formatters'
+import { formatCurrency, formatDateTime } from '@/lib/formatters'
 import { cn } from '@/lib/cn'
 
 // Per-position card for the live sidebar "Positions" tab.
@@ -24,6 +24,12 @@ export function PositionCard({ position }: { position: Position }) {
         <Row k="Entry" v={formatCurrency(p.avgEntry)} />
         <Row k="Mark" v={formatCurrency(p.currentPrice)} />
         <Row k="Mkt Value" v={formatCurrency(Math.abs(p.marketValue))} />
+        {p.openedAt && (
+          <div className="col-span-2 flex items-center justify-between gap-2">
+            <dt className="text-faint uppercase tracking-[0.08em]">Opened</dt>
+            <dd className="num">{formatDateTime(p.openedAt)}</dd>
+          </div>
+        )}
       </dl>
     </div>
   )
@@ -77,6 +83,7 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
             <th className="text-right">Mkt Value</th>
             <th className="text-right">Unreal P&L</th>
             <th className="text-right">Total P&L</th>
+            <th className="text-right">Opened</th>
           </tr>
         </thead>
         <tbody>
@@ -91,6 +98,7 @@ export function PositionsTable({ positions }: { positions: Position[] }) {
               <td className="text-right">{formatCurrency(Math.abs(p.marketValue))}</td>
               <td className="text-right"><Money value={p.unrealizedPnl} signed /></td>
               <td className="text-right"><Money value={p.totalPnl} signed /></td>
+              <td className="text-right text-faint">{p.openedAt ? formatDateTime(p.openedAt) : '—'}</td>
             </tr>
           ))}
         </tbody>

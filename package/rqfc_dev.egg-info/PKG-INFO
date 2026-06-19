@@ -1,0 +1,114 @@
+Metadata-Version: 2.4
+Name: rqfc-dev
+Version: 1.0.0
+Summary: Thin client for the RQFC fund trading backend
+Author: RQFC
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Requires-Dist: requests>=2.28.0
+
+# rqfc
+
+Thin Python client for the RQFC fund trading backend.
+
+Traders log in with credentials or an API key issued by an admin. The backend
+owns authentication, permissions, and each pod's Alpaca credentials, then
+submits trades on the trader's behalf. **No Alpaca keys or Supabase settings
+ever touch this client**. A pod is one Alpaca account; several traders share a
+pod; admins can trade any pod and manage capital/membership.
+
+See `../docs/ARCHITECTURE.md` and `../docs/RUNBOOK.md` for the full system.
+
+## Install
+From GitHub:
+
+```bash
+pip install git+https://github.com/Rutgers-Quant-Finance-Club/fund.git
+```
+
+After publishing to PyPI, this becomes:
+
+```bash
+pip install rqfc
+```
+
+For local package development from this repo:
+```bash
+pip install -e .
+```
+
+## Trader Login
+By default, `rqfc` talks to the deployed RQFC API:
+
+```text
+https://fund-tkb1.onrender.com
+```
+
+Admins issue either email/password credentials or a trader API key. Traders do
+not need to configure Supabase or Alpaca.
+
+Email/password login:
+```python
+import rqfc
+
+rqfc.login("alice@example.com", "password")
+```
+
+API key login, useful for scripts and strategy runners:
+```python
+import rqfc
+
+rqfc.login(api_key="rqfc_...")
+```
+
+## Local Dev Override
+To test against a local or staging backend, use `RQFC_BACKEND_URL`:
+```bash
+export RQFC_BACKEND_URL=http://localhost:8000
+```
+
+Or pass it directly:
+```python
+import rqfc
+
+rqfc.login("alice@example.com", "password", backend_url="http://localhost:8000")
+```
+
+## Trader Usage
+```python
+import rqfc
+
+rqfc.login(api_key="rqfc_...")
+
+rqfc.whoami()                 # your profile + assigned pods
+
+acct = rqfc.pod("Alpha Equities")   # by name or id; must be assigned
+acct.buy("AAPL", 10)
+acct.sell("AAPL", 5)
+acct.short("TSLA", 3)
+acct.dollar_buy("NVDA", 5000)
+acct.account()                # live equity / cash / buying power
+acct.positions()              # live positions
+acct.price("AAPL")
+acct.sync()                   # refresh the dashboard (positions, NAV, metrics)
+```
+
+## Admin Usage
+```python
+rqfc.login("admin@example.com", "password")
+admin = rqfc.admin()
+
+pod = admin.create_pod("Vol Arb", "options", capital=100000,
+                       alpaca_api_key="PK...", alpaca_api_secret="...")
+admin.list_traders()
+admin.add_trader(pod["id"], trader_id, role="trader")
+admin.allocate_capital(pod["id"], 150000)
+admin.remove_trader(pod["id"], trader_id)
+```
+
+## Method Reference
+**Account** (`rqfc.pod(...)`): `buy`, `sell`, `short`, `cover`, `dollar_buy`,
+`dollar_sell`, `cancel`, `account`, `positions`, `price`, `bars`, `sync`.
+
+**Admin** (`rqfc.admin()`): `create_pod`, `set_alpaca`, `allocate_capital`,
+`list_traders`, `add_trader`, `remove_trader`.

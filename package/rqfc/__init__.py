@@ -50,7 +50,11 @@ def configure(backend_url: str = None) -> Session:
 def login(email: str = None, password: str = None, *, api_key: str = None,
           backend_url: str = None) -> dict:
     """Authenticate and start a session. Returns your profile."""
-    sess = configure(backend_url)
+    global _session
+    if backend_url is not None or _session is None:
+        sess = configure(backend_url)
+    else:
+        sess = _session
     if api_key:
         if email or password:
             raise ValueError("Use either email/password or api_key, not both.")

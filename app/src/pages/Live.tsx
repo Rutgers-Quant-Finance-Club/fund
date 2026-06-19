@@ -10,8 +10,16 @@ import { formatCurrency } from '@/lib/formatters'
 
 type Tab = 'trades' | 'positions'
 
+const WINDOWS = [
+  { label: 'Today', minutes: 390 },
+  { label: '1W', minutes: 7 * 1440 },
+  { label: 'All', minutes: null },
+] as const
+type WindowMinutes = typeof WINDOWS[number]['minutes']
+
 export function Live() {
-  const fund = useFund()
+  const [chartMinutes, setChartMinutes] = useState<WindowMinutes>(390)
+  const fund = useFund(chartMinutes)
   const { pods, trades } = fund
   const [view, setView] = useState<string>('all') // 'all' | podId
   const [tab, setTab] = useState<Tab>('trades')
@@ -138,9 +146,31 @@ export function Live() {
 
         {/* ── center/right chart ── */}
         <section className="space-y-3">
-          <div className="flex items-baseline justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h1 className="font-serif text-2xl">{headline.name}</h1>
-            <span className="label">Live account value · marked to market</span>
+            <div className="flex items-center gap-3">
+              {view !== 'all' && (() => {
+                const sharpe = pods.find((p) => p.id === view)?.sharpe
+                return sharpe != null
+                  ? <span className="label">Sharpe&nbsp;<span className="num text-ink">{sharpe.toFixed(3)}</span></span>
+                  : null
+              })()}
+              <div className="flex items-center gap-1">
+              <span className="label mr-1">Window</span>
+              {WINDOWS.map((w) => (
+                <button
+                  key={String(w.minutes)}
+                  onClick={() => setChartMinutes(w.minutes)}
+                  className={cn(
+                    'px-2.5 py-1 text-2xs uppercase tracking-[0.1em] border border-rule',
+                    chartMinutes === w.minutes ? 'bg-ink text-paper' : 'hover:bg-paper',
+                  )}
+                >
+                  {w.label}
+                </button>
+              ))}
+              </div>
+            </div>
           </div>
           <PortfolioChart pods={pods} visible={visible} height={440} />
 

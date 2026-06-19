@@ -5,6 +5,7 @@ writes everything to Supabase. Traders authenticate with backend sessions,
 rqfc API keys, or legacy Supabase JWTs.
 """
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import json
 import logging
@@ -24,6 +25,7 @@ from .auth import (
     get_current_trader,
     hash_api_key,
 )
+from .alpaca_client import invalidate_pod_creds_cache
 from .portal_auth import get_admin_actor, verify_google_admin, issue_portal_token
 from .config import get_settings
 from .schemas import (
@@ -264,8 +266,6 @@ def place_order(req: OrderRequest, trader: dict = Depends(get_current_trader)):
         notional=req.notional, order_type=req.order_type,
         limit_price=req.limit_price, time_in_force=req.time_in_force,
     )
-    print("here is order")
-    print(order)
     row = alp.to_trade_row(
         order,
         req.order_label,
@@ -350,20 +350,34 @@ def _live_pod_snapshot(pod: dict) -> dict:
     }
     try:
         account = alp.get_account(pod["id"])
-        positions, totals = _marked_portfolio_from_fills(pod["id"])
-        if not positions:
-            positions = alp.get_positions(pod["id"])
-            totals = _totals_from_live_positions(positions)
+
+        # Positions: always from Alpaca — the authoritative source for what is
+        # currently held. Fill-derived positions can diverge if trades were placed
+        # outside the system or fills haven't synced yet.
+        positions = alp.get_positions(pod["id"])
+        totals = _totals_from_live_positions(positions)
+
         nav = float(account.get("portfolio_value") or account.get("equity") or snapshot["nav"])
         allocated = snapshot["allocated_capital"]
+        unrealized_pnl = totals["unrealized_pnl"]
+        # Realized P&L = how much the account has grown minus what's still open.
+        # This is always consistent with Alpaca's numbers without needing fill history.
+        total_pnl = round(nav - allocated, 2)
+        realized_pnl = round(total_pnl - unrealized_pnl, 2)
+
         snapshot.update({
             "live": True,
-            "source": "alpaca_fills_market_data",
+            "source": "alpaca",
             "account": account,
             "positions": positions,
             "nav": nav,
             "cash": float(account.get("cash") or 0),
-            **totals,
+            "gross_notional": totals["gross_notional"],
+            "net_notional": totals["net_notional"],
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "total_pnl": total_pnl,
+            "fees": totals.get("fees", 0.0),
             "live_gain": round(nav - allocated, 2),
             "daily_return": account.get("session_return"),
             "session_return": account.get("session_return"),
@@ -376,12 +390,13 @@ def _live_pod_snapshot(pod: dict) -> dict:
             "portfolio_value": nav,
             "gross_notional": snapshot["gross_notional"],
             "net_notional": snapshot["net_notional"],
-            "realized_pnl": snapshot["realized_pnl"],
-            "unrealized_pnl": snapshot["unrealized_pnl"],
-            "total_pnl": snapshot["total_pnl"],
+            "realized_pnl": realized_pnl,
+            "unrealized_pnl": unrealized_pnl,
+            "total_pnl": total_pnl,
             "source": snapshot["source"],
         })
     except Exception as e:
+        # Alpaca unavailable — fall back to fill-derived positions without re-syncing.
         derived_positions, totals = _marked_portfolio_from_fills(pod["id"], sync_alpaca=False)
         if derived_positions:
             allocated = snapshot["allocated_capital"]
@@ -501,7 +516,7 @@ def public_nav_series(minutes: int = 390):
 
     Cached briefly server-side since minute bars only change once a minute.
     """
-    minutes = max(30, min(int(minutes or 390), 1440))
+    minutes = max(30, min(int(minutes or 390), 10080))  # cap at 7 calendar days
     now = time.time()
     if (
         _NAV_SERIES_CACHE["payload"] is not None
@@ -522,12 +537,24 @@ def public_nav_series(minutes: int = 390):
     return payload
 
 
+def _fetch_snapshots_concurrent(pods: list[dict]) -> list[dict]:
+    """Fetch live snapshots for all pods in parallel (up to 8 at a time).
+
+    Bounded at 8 threads to avoid overwhelming Alpaca's rate limits while still
+    giving a meaningful speedup over serial fetches.
+    """
+    if not pods:
+        return []
+    max_workers = min(len(pods), 8)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        return list(ex.map(_live_pod_snapshot, pods))
+
+
 @app.get("/public/live")
 def public_live_snapshots():
     """Public transparency feed. Never returns credentials or trader identities."""
     pods = db.sb().table("pods").select("*").order("created_at").execute().data or []
-    snapshots = [_live_pod_snapshot(p) for p in pods]
-    return {"pods": snapshots}
+    return {"pods": _fetch_snapshots_concurrent(pods)}
 
 
 @app.get("/public/pods/{pod_id}/live")
@@ -592,10 +619,11 @@ def public_ticker(symbols: str = None):
     credentials or the backend env (no pod-specific account is touched).
     """
     requested = [s.strip().upper() for s in symbols.split(",")] if symbols else TICKER_SYMBOLS
-    pods = db.sb().table("pods").select("id").limit(1).execute().data or []
-    creds_pod = pods[0]["id"] if pods else "__ticker__"
+    # Use "__env__" as the pod sentinel so _resolve_creds falls through to the
+    # backend env Alpaca keys — avoids coupling the public ticker to a specific
+    # pod's credentials (which could be rotated or invalid).
     try:
-        snaps = alp.get_snapshots(creds_pod, requested)
+        snaps = alp.get_snapshots("__env__", requested)
         items = [
             {"symbol": sym, "price": snaps[sym]["price"], "change_pct": snaps[sym]["change_pct"]}
             for sym in requested if sym in snaps
@@ -617,14 +645,14 @@ def public_trades(pod_id: str = None, limit: int = 100):
 def public_leaderboard():
     """Per-pod aggregated standings, marked to live market data. No credentials."""
     pods = db.sb().table("pods").select("*").order("created_at").execute().data or []
+    snapshots = _fetch_snapshots_concurrent(pods)
     rows = []
-    for pod in pods:
-        snap = _live_pod_snapshot(pod)
+    for snap in snapshots:
         allocated = snap["allocated_capital"] or 0
         rows.append({
-            "pod_id": pod["id"],
-            "name": pod["name"],
-            "asset_class": pod.get("asset_class"),
+            "pod_id": snap["id"],
+            "name": snap["name"],
+            "asset_class": snap.get("asset_class"),
             "account_value": snap["nav"],
             "allocated_capital": allocated,
             "total_pnl": snap["total_pnl"],
@@ -716,6 +744,7 @@ def admin_set_alpaca(pod_id: str, req: SetAlpacaRequest, actor: dict = Depends(g
         raise HTTPException(404, "Pod not found.")
     db.set_pod_alpaca(pod_id, alpaca_account_id=req.alpaca_account_id,
                       api_key=req.alpaca_api_key, api_secret=req.alpaca_api_secret)
+    invalidate_pod_creds_cache(pod_id)
     return {"ok": True}
 
 
