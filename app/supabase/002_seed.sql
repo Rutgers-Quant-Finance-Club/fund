@@ -91,20 +91,6 @@ begin
 end;
 $$;
 
--- ── Positions (pod-level — one Alpaca account per pod) ───────
-
-insert into positions (pod_id, symbol, quantity, avg_entry_price, current_price, market_value, unrealized_pnl) values
-  ('a1000000-0000-0000-0000-000000000001', 'AAPL',  500,  178.50, 184.20,   92100,   2850),
-  ('a1000000-0000-0000-0000-000000000001', 'MSFT',  300,  410.00, 425.80,  127740,   4740),
-  ('a1000000-0000-0000-0000-000000000001', 'NVDA',  200,  820.00, 875.50,  175100,  11100),
-  ('a1000000-0000-0000-0000-000000000001', 'GOOGL', 100,  175.00, 180.90,   18090,     590),
-
-  ('a1000000-0000-0000-0000-000000000002', 'SPY',    50,  490.00, 498.75,   24937.5,  437.5),
-  ('a1000000-0000-0000-0000-000000000002', 'QQQ',    30,  420.00, 435.00,   13050,    450),
-
-  ('a1000000-0000-0000-0000-000000000003', 'TLT',   400,   92.00,  94.50,   37800,   1000),
-  ('a1000000-0000-0000-0000-000000000003', 'IEF',   600,   95.00,  96.80,   58080,   1080);
-
 -- ── Sample trades (last 14 days) ─────────────────────────────
 
 do $$
@@ -169,28 +155,3 @@ begin
   end loop;
 end;
 $$;
-
--- ── Seed metrics (approximate, computed from seeded NAV) ───────
-
-insert into metrics (
-  pod_id, as_of_date, cumulative_return, annualized_return, volatility,
-  sharpe, sortino, beta, alpha, max_drawdown, calmar, var_95, win_rate, trade_count
-)
-select
-  pod_id,
-  max(date) as as_of_date,
-  (exp(sum(ln(1 + coalesce(daily_return, 0)))) - 1)                     as cumulative_return,
-  (exp(sum(ln(1 + coalesce(daily_return, 0))) * (252.0 / count(*))) - 1) as annualized_return,
-  stddev_pop(daily_return) * sqrt(252)                                   as volatility,
-  (avg(daily_return) - 0.05/252) / nullif(stddev_pop(daily_return),0) * sqrt(252) as sharpe,
-  (avg(daily_return) - 0.05/252) / nullif(stddev_pop(case when daily_return < 0.05/252 then daily_return end),0) * sqrt(252) as sortino,
-  0.85                                                                   as beta,
-  0.032                                                                  as alpha,
-  min(daily_return) * 5                                                  as max_drawdown,
-  null                                                                   as calmar,
-  percentile_cont(0.05) within group (order by daily_return)            as var_95,
-  count(case when daily_return > 0 then 1 end)::numeric / count(*)       as win_rate,
-  (select count(*) from trades t where t.pod_id = n.pod_id)::int        as trade_count
-from nav_history n
-where daily_return is not null
-group by pod_id;

@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 
 from . import alpaca_client as alp
-from . import db, metrics
+from . import db
 from . import accounting
 from .auth import (
     api_key_prefix,
@@ -680,22 +680,16 @@ def market_bars(symbol: str, pod_id: str, days: int = 30,
     return alp.get_bars(pod_id, symbol, days)
 
 
-# ── Sync: pull Alpaca → Supabase (dashboard data) ─────────────────────────────
+# ── Sync: persist daily NAV closes (fallback series) ──────────────────────────
+# Live positions/metrics are computed on demand from fills + market data, so the
+# only thing worth persisting here is the daily NAV history used as a fallback.
 
 @app.post("/sync/{pod_id}")
 def sync_pod(pod_id: str, trader: dict = Depends(get_current_trader)):
     _require_pod_access(trader, pod_id)
-    positions = alp.get_positions(pod_id)
-    db.replace_positions(pod_id, positions)
-
     nav_rows = alp.get_nav_history(pod_id)
     db.upsert_nav(pod_id, nav_rows)
-
-    m = metrics.compute(nav_rows, trade_count=db.count_trades(pod_id))
-    if m:
-        db.upsert_metrics(pod_id, m)
-
-    return {"positions": len(positions), "nav_days": len(nav_rows), "metrics": bool(m)}
+    return {"nav_days": len(nav_rows)}
 
 
 # ── Admin portal ──────────────────────────────────────────────────────────────

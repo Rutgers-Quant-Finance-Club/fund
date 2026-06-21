@@ -476,7 +476,7 @@ def log_capital_allocation(pod_id, new_capital, previous_capital, allocated_by, 
     }).execute()
 
 
-# ── Trades, positions, NAV, metrics ──────────────────────────────────────────
+# ── Trades & NAV ─────────────────────────────────────────────────────────────
 
 def log_trade(pod_id, trader_id, trade: dict) -> None:
     payload = {"pod_id": pod_id, "trader_id": trader_id, **trade}
@@ -494,35 +494,9 @@ def log_trade(pod_id, trader_id, trade: dict) -> None:
         sb().table("trades").insert(legacy).execute()
 
 
-def replace_positions(pod_id, rows: list) -> None:
-    columns = {
-        "symbol", "quantity", "avg_entry_price", "current_price",
-        "market_value", "unrealized_pnl",
-    }
-    if rows:
-        now = _now()
-        sb().table("positions").upsert(
-            [{"pod_id": pod_id, "updated_at": now, **{k: r.get(k) for k in columns}} for r in rows],
-            on_conflict="pod_id,symbol",
-        ).execute()
-    held = [r["symbol"] for r in rows]
-    q = sb().table("positions").delete().eq("pod_id", pod_id)
-    if held:
-        q = q.not_.in_("symbol", held)
-    q.execute()
-
-
 def upsert_nav(pod_id, rows: list) -> None:
     if not rows:
         return
     sb().table("nav_history").upsert(
         [{"pod_id": pod_id, **r} for r in rows], on_conflict="pod_id,date"
     ).execute()
-
-
-def upsert_metrics(pod_id, row: dict) -> None:
-    sb().table("metrics").upsert({"pod_id": pod_id, **row}, on_conflict="pod_id,as_of_date").execute()
-
-
-def count_trades(pod_id) -> int:
-    return sb().table("trades").select("id", count="exact").eq("pod_id", pod_id).execute().count or 0

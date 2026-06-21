@@ -87,22 +87,10 @@ create index on trades (pod_id, executed_at desc);
 create index on trades (trader_id, executed_at desc);
 create index on trades (executed_at desc);
 
--- ── Positions (pod-level, straight from the pod's Alpaca account) ──
-create table positions (
-  id              uuid primary key default gen_random_uuid(),
-  pod_id          uuid not null references pods(id) on delete cascade,
-  symbol          text not null,
-  quantity        numeric not null,
-  avg_entry_price numeric not null,
-  current_price   numeric,
-  market_value    numeric,
-  unrealized_pnl  numeric,
-  updated_at      timestamptz not null default now(),
-  unique (pod_id, symbol)
-);
-create index on positions (pod_id);
-
--- ── Pod time series & metrics (backend syncs from Alpaca) ────
+-- ── Pod NAV time series (backend syncs daily closes from Alpaca) ──
+-- Live positions/metrics are computed on the fly from fills + market data
+-- (see order_fills / position_marks / portfolio_marks in 004); only the daily
+-- NAV is persisted here as the fallback series when intraday bars are absent.
 create table nav_history (
   pod_id       uuid not null references pods(id) on delete cascade,
   date         date not null,
@@ -110,24 +98,6 @@ create table nav_history (
   cash         numeric not null default 0,
   daily_return numeric,
   primary key (pod_id, date)
-);
-
-create table metrics (
-  pod_id            uuid not null references pods(id) on delete cascade,
-  as_of_date        date not null,
-  cumulative_return numeric,
-  annualized_return numeric,
-  volatility        numeric,
-  sharpe            numeric,
-  sortino           numeric,
-  beta              numeric,
-  alpha             numeric,
-  max_drawdown      numeric,
-  calmar            numeric,
-  var_95            numeric,
-  win_rate          numeric,
-  trade_count       integer,
-  primary key (pod_id, as_of_date)
 );
 
 -- ── Capital allocation audit log ─────────────────────────────
@@ -141,19 +111,6 @@ create table capital_allocations (
   created_at        timestamptz not null default now()
 );
 create index on capital_allocations (pod_id, created_at desc);
-
--- ── Reference data ───────────────────────────────────────────
-create table price_history (
-  symbol text not null, date date not null, close numeric not null,
-  primary key (symbol, date)
-);
-create table benchmark_prices (
-  symbol text not null, date date not null, close numeric not null,
-  primary key (symbol, date)
-);
-create table config (
-  key text primary key, value jsonb not null
-);
 
 -- ── members view (keeps the frontend's roster API stable) ────
 -- Presents pod_memberships + traders as the old "members" shape.
@@ -180,35 +137,19 @@ alter table traders                 enable row level security;
 alter table pod_memberships         enable row level security;
 alter table pod_alpaca_credentials  enable row level security;
 alter table trades                  enable row level security;
-alter table positions               enable row level security;
 alter table nav_history             enable row level security;
-alter table metrics                 enable row level security;
 alter table capital_allocations     enable row level security;
-alter table price_history           enable row level security;
-alter table benchmark_prices        enable row level security;
-alter table config                  enable row level security;
 
 create policy "public read" on pods                for select to anon, authenticated using (true);
 create policy "public read" on traders             for select to anon, authenticated using (true);
 create policy "public read" on pod_memberships     for select to anon, authenticated using (true);
 create policy "public read" on trades              for select to anon, authenticated using (true);
-create policy "public read" on positions           for select to anon, authenticated using (true);
 create policy "public read" on nav_history         for select to anon, authenticated using (true);
-create policy "public read" on metrics             for select to anon, authenticated using (true);
 create policy "public read" on capital_allocations for select to anon, authenticated using (true);
-create policy "public read" on price_history       for select to anon, authenticated using (true);
-create policy "public read" on benchmark_prices    for select to anon, authenticated using (true);
-create policy "public read" on config              for select to anon, authenticated using (true);
 -- (pod_alpaca_credentials intentionally has NO policy.)
 
 grant select on members to anon, authenticated;
 
--- ── Config seed ──────────────────────────────────────────────
-insert into config (key, value) values
-  ('risk_free_rate',        '0.05'),
-  ('trading_days_per_year', '252');
-
 -- ── Realtime ─────────────────────────────────────────────────
 alter publication supabase_realtime add table trades;
-alter publication supabase_realtime add table positions;
 alter publication supabase_realtime add table nav_history;

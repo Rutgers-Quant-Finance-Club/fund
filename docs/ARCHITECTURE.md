@@ -94,7 +94,8 @@ should default to the production backend, currently `https://fund-tkb1.onrender.
 - **Auth**: each trader is a Supabase Auth user (email + password). Login returns
   a JWT the backend verifies.
 - **Postgres**: schema in `app/supabase/` (run in order: `001_schema.sql`,
-  `002_seed.sql`, `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`).
+  `002_seed.sql`, `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`,
+  `005_drop_unused.sql`).
   Public read on display tables; **all writes are service-role** (from the
   backend). The `pod_alpaca_credentials` table has *no* RLS policy, so only the
   backend can read it.
@@ -109,7 +110,12 @@ Key tables:
   `realized_pnl`, `fees`, `multiplier`, and option/instrument fields.
 - `order_fills` — Alpaca fills (authoritative for positions/P&L); trades stay the
   public order log (004).
-- `positions`, `nav_history`, `metrics` — pod-level, synced from Alpaca.
+- `position_marks`, `portfolio_marks` — live marked-to-market positions and pod
+  value, computed from fills + market data on each public-feed poll (004).
+- `nav_history` — daily NAV closes synced from Alpaca, kept as the fallback series
+  when intraday bars are unavailable. (Live positions and risk/return metrics are
+  computed on the fly, not stored — the old `positions`/`metrics`/`price_history`/
+  `benchmark_prices`/`config` tables were dropped in 005.)
 - `capital_allocations` — audit log of funding changes.
 - `members` (view) — `pod_memberships ⋈ traders`, so the dashboard has a stable roster API.
 
@@ -231,7 +237,7 @@ per-pod secret storage entirely.
 
 ## Build phases
 1. **DB schema** — ✅ done (`app/supabase/001_schema.sql`, `002_seed.sql`,
-   `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`).
+   `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`, `005_drop_unused.sql`).
 2. **Confirm Alpaca product** — Broker API vs Trading API (above).
 3. **Backend** — FastAPI skeleton: JWT verification, `/orders`, permission checks,
    Alpaca submission, trade logging. Move `trading.py`/`account.py`/`market_data.py`
