@@ -12,8 +12,10 @@ dashboard. ~30 minutes. See `ARCHITECTURE.md` for the why.
 
 ## 1. Database
 In the Supabase dashboard → **SQL Editor**, run, in order:
-1. `app/supabase/migrations/001_schema.sql`
-2. `app/supabase/migrations/002_seed.sql`  *(optional — demo pods/trades so the dashboard isn't empty)*
+1. `app/supabase/001_schema.sql`
+2. `app/supabase/002_seed.sql`  *(optional — demo pods/trades so the dashboard isn't empty)*
+3. `app/supabase/003_trader_api_keys.sql`
+4. `app/supabase/004_portfolio_accounting.sql`
 
 Then grab these from **Settings → API**:
 - Project URL → `SUPABASE_URL`
@@ -105,11 +107,13 @@ rqfc.pod("Vol Arb").buy("SPY", 1)   # -> [403] You are not assigned to this pod.
 ```bash
 cd app
 npm install
-# .env: VITE_SUPABASE_URL + VITE_SUPABASE_ANON_KEY
+# .env: VITE_BACKEND_URL=http://localhost:8000   (the dashboard reads the
+#       backend's /public/* feeds — no Supabase keys needed in the browser)
 npm run dev
 ```
-Open the app → **Test Pod**. The AAPL trade is in the blotter; after `sync()` the
-position and NAV appear. Or verify directly in Supabase → **Table Editor → trades**.
+Open the app → **Test Pod**. The AAPL trade is in the blotter and the position /
+NAV are marked to live market data from the `/public/*` feeds. (You can also
+verify directly in Supabase → **Table Editor → trades**.)
 
 ---
 

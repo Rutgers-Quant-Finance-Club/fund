@@ -39,12 +39,21 @@ because the FastAPI app is in `backend/app/main.py`.
 | GET | `/pods/{id}/positions` | member / admin | live positions |
 | GET | `/market/price`, `/market/bars` | trader | market data |
 | POST | `/sync/{pod_id}` | member / admin | Alpaca → Supabase (positions, NAV, metrics) |
+| GET | `/public/live` | — | live snapshot of every pod (account value, positions, P&L, roster) |
+| GET | `/public/pods/{id}/live` | — | live snapshot for one pod |
+| GET | `/public/nav-series` | — | per-pod **1-minute** NAV series (fills replayed vs 1Min bars; `?minutes=`) |
+| GET | `/public/pods/{id}/intraday-nav` | — | one pod's intraday NAV history (`?minutes=`) |
+| GET | `/public/pods/{id}/notional-history` | — | one pod's gross/net notional history (`?minutes=`) |
+| GET | `/public/trades` | — | completed-trades / order log + pod & trader names (`?pod_id=&limit=`) |
+| GET | `/public/ticker` | — | latest price + daily change for a basket of stocks (`?symbols=`) |
+| GET | `/public/leaderboard` | — | per-pod standings marked to live market data |
 | POST | `/admin/login` | Google ID token | verified Google admin login → portal token |
 | GET | `/admin/pods` | admin | pods + whether Alpaca is configured |
 | POST | `/admin/pods` | admin | create pod (+ optional Alpaca creds) |
 | POST | `/admin/pods/{id}/alpaca` | admin | set pod Alpaca creds |
 | POST | `/admin/pods/{id}/capital` | admin | allocate capital (audited) |
 | GET | `/admin/traders` | admin | list traders |
+| GET | `/admin/trades` | admin | trade activity log (`?trader_id=&pod_id=&limit=`) |
 | POST | `/admin/traders` | admin | create rqfc account (Auth user + trader) |
 | GET | `/admin/traders/{id}/api-keys` | admin | list a trader's API keys, excluding hashes |
 | POST | `/admin/traders/{id}/api-keys` | admin | create API key; plaintext returned once |
@@ -85,11 +94,14 @@ validating a single pod). Keys never leave the backend.
 ```
 app/
   config.py         env/settings
-  auth.py           JWT verification → trader
-  db.py             Supabase service-role client + all writes
-  alpaca_client.py  per-pod Alpaca access (orders, positions, history, data)
+  auth.py           trader auth: backend sessions, rqfc API keys, legacy Supabase JWTs → trader
+  portal_auth.py    admin auth: Google ID-token verify + portal tokens; get_admin_actor
+  db.py             Supabase service-role client + all writes (+ public-feed read helpers)
+  alpaca_client.py  per-pod Alpaca access (orders, positions, history, market data)
+  accounting.py     replay fills → marked positions, totals, minute-NAV series
   metrics.py        NAV → risk/return metrics
   schemas.py        request models
-  main.py           routes
+  main.py           routes (trader, /public/*, /admin/*)
+  portal/index.html the admin portal web UI served at GET /portal
 scripts/seed_users.py   create sample Supabase Auth users + traders
 ```

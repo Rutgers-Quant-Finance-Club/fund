@@ -41,8 +41,14 @@ running on a trader's laptop. So three things live behind a trusted backend:
                               5. log trade (service role) ──────────► Supabase
         ◄───────────────────  return fill
 
- React dashboard ───────────────────────────────────────────────► Supabase (public read)
+ React dashboard ───────────────────────────────────────────────► Backend /public/* feeds
 ```
+
+> **Note on the dashboard's data source.** The React dashboard does **not** read
+> Supabase directly anymore. It reads the backend's credential-free `/public/*`
+> feeds, which mark positions to live Alpaca market data server-side. Supabase is
+> still the system of record (the backend reads/writes it with the service role),
+> but the browser only ever talks to the backend.
 
 The package is a **thin client**: authenticate with the RQFC backend, then make
 HTTP calls. The client should not require traders to configure Supabase project
@@ -87,16 +93,22 @@ should default to the production backend, currently `https://fund-tkb1.onrender.
 ### 1. Supabase (database + auth)
 - **Auth**: each trader is a Supabase Auth user (email + password). Login returns
   a JWT the backend verifies.
-- **Postgres**: schema in `app/supabase/migrations/001_schema.sql`. Public read on
-  display tables; **all writes are service-role** (from the backend). The
-  `pod_alpaca_credentials` table has *no* RLS policy, so only the backend can read it.
+- **Postgres**: schema in `app/supabase/` (run in order: `001_schema.sql`,
+  `002_seed.sql`, `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`).
+  Public read on display tables; **all writes are service-role** (from the
+  backend). The `pod_alpaca_credentials` table has *no* RLS policy, so only the
+  backend can read it.
 
 Key tables:
 - `pods` — public pod info + `allocated_capital`. No Alpaca secrets.
 - `traders` — rqfc accounts, linked to auth via `auth_user_id`, `is_admin` flag.
 - `pod_memberships` — which traders may trade which pods, with `role`.
 - `pod_alpaca_credentials` — **backend-only** Alpaca account id / keys per pod.
-- `trades` — every order, tagged with `pod_id` + `trader_id`.
+- `trader_api_keys` — backend-only; hashed rqfc API keys (003).
+- `trades` — every order, tagged with `pod_id` + `trader_id`. Extended in 004 with
+  `realized_pnl`, `fees`, `multiplier`, and option/instrument fields.
+- `order_fills` — Alpaca fills (authoritative for positions/P&L); trades stay the
+  public order log (004).
 - `positions`, `nav_history`, `metrics` — pod-level, synced from Alpaca.
 - `capital_allocations` — audit log of funding changes.
 - `members` (view) — `pod_memberships ⋈ traders`, so the dashboard has a stable roster API.
@@ -165,9 +177,21 @@ The portal is also the control plane for trader API keys:
 - Revoke keys without deleting audit history.
 
 ### 5. React dashboard
-Read-only, public. Already reads `pods`, `members` (view), `trades`,
-`positions`, `nav_history`, `metrics` from Supabase. No changes needed beyond
-the schema rename already applied.
+Read-only, public SPA (Vite + React, `HashRouter`, deployed to GitHub Pages).
+It reads **only the backend's `/public/*` feeds** (via `VITE_BACKEND_URL`), not
+Supabase directly. `src/data/useFund.ts` assembles the whole view from four feeds
+polled on independent intervals:
+
+| Feed | Powers |
+|---|---|
+| `GET /public/live` (5s) | per-pod account value, positions, P&L, roster |
+| `GET /public/nav-series` (60s) | the center 1-minute NAV chart |
+| `GET /public/trades` (8s) | completed-trades / blotter |
+| `GET /public/ticker` (15s) | the stock ticker tape |
+
+The backend marks positions to live Alpaca market data, so the public feeds are
+self-contained — the browser never needs Supabase or Alpaca keys. Routes:
+`/` (Live), `/leaderboard`, `/pods`, `/pods/:id`, `/about`. See `app/README.md`.
 
 ## Connecting the Alpaca accounts — one open decision
 
@@ -206,7 +230,8 @@ per-pod secret storage entirely.
 - A trader can only act on pods in their `pod_memberships` (admins bypass).
 
 ## Build phases
-1. **DB schema** — ✅ done (`001_schema.sql`, `002_seed.sql`).
+1. **DB schema** — ✅ done (`app/supabase/001_schema.sql`, `002_seed.sql`,
+   `003_trader_api_keys.sql`, `004_portfolio_accounting.sql`).
 2. **Confirm Alpaca product** — Broker API vs Trading API (above).
 3. **Backend** — FastAPI skeleton: JWT verification, `/orders`, permission checks,
    Alpaca submission, trade logging. Move `trading.py`/`account.py`/`market_data.py`

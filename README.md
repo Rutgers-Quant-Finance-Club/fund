@@ -13,7 +13,7 @@ A transparent, multi-pod paper-trading fund for RQFC.
 | `app/` | React + Vite dashboard (public, read-only). Deploys to GitHub Pages. |
 | `backend/` | FastAPI service: auth, permissions, Alpaca order execution, DB writes. |
 | `package/` | `rqfc` — thin Python client traders/admins use. |
-| `app/supabase/migrations/` | Postgres schema + demo seed. |
+| `app/supabase/` | Postgres schema + demo seed (`001`–`004` SQL files). |
 | `docs/` | `ARCHITECTURE.md` (design), `RUNBOOK.md` (end-to-end setup). |
 
 

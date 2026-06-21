@@ -15,7 +15,6 @@ export default defineConfig({
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom'],
-          supabase: ['@supabase/supabase-js'],
           charts: ['recharts'],
           query: ['@tanstack/react-query', '@tanstack/react-table'],
         },

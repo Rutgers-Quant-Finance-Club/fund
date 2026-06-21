@@ -44,8 +44,6 @@ jobs:
           # Where the FastAPI backend (public feeds + admin portal) is hosted.
           # Override with a VITE_BACKEND_URL repo secret; otherwise defaults to Render.
           VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL || 'https://fund-tkb1.onrender.com' }}
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
 
       - name: Add SPA fallback
         run: cp dist/index.html dist/404.html
