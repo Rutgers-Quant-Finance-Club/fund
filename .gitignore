@@ -11,9 +11,12 @@ __pycache__/
 venv/
 node_modules/
 dist/
+build/
+*.egg-info/
 fund.env
 demo_pic.png
 .claude
 replicate/
 
 .replicate/
+

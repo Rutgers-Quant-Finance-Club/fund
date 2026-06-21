@@ -13,16 +13,16 @@ The four deployable pieces and their hosts:
 | `app/` React dashboard | **GitHub Pages** |
 | `rqfc/` client | **PyPI** |
 
-**Deploy order matters:** Supabase → Backend → App + Package. The app and the
-package both need the live backend URL, and the backend needs the database.
+**Deploy order matters:** Supabase → Google OAuth → Backend → App + Package. The
+app and the package both need the live backend URL, and the backend needs the
+database and the OAuth client id.
 
 ## 0. Prerequisites
 - A GitHub account with this repo pushed to it
 - A Supabase account (free tier is fine)
 - A Railway account (linked to GitHub)
+- A Google account with access to the Google Cloud Console (for §2)
 - One Alpaca **paper** account → API key + secret (https://alpaca.markets)
-- A Google OAuth **Web application** client (Google Cloud Console → APIs &
-  Services → Credentials) for the admin portal login
 - A PyPI account + API token
 
 ---
@@ -35,7 +35,7 @@ Create a project, then in **SQL Editor** run, in order:
 4. `app/supabase/004_portfolio_accounting.sql`
 5. `app/supabase/005_drop_unused.sql`  *(drops legacy tables; harmless on a fresh DB)*
 
-Then grab these from **Settings → API** (you'll paste them into Railway in §2):
+Then grab these from **Settings → API** (you'll paste them into Railway in §3):
 - Project URL → `SUPABASE_URL`
 - `anon` public key → `SUPABASE_ANON_KEY`
 - `service_role` secret key → `SUPABASE_SERVICE_ROLE_KEY`
@@ -43,7 +43,42 @@ Then grab these from **Settings → API** (you'll paste them into Railway in §2
 
 ---
 
-## 2. Backend — Railway
+## 2. Admin login — Google OAuth
+The admin portal (`/portal`, served by the backend) signs admins in with Google
+Identity Services. You need a Google OAuth **Web application** client id; the
+backend verifies each login's Google ID token against it and only admits emails in
+`ADMIN_GOOGLE_EMAILS`. Set up the client now and collect its id; you'll add the
+backend URL as an authorized origin in §3 (after Railway gives you a domain).
+
+1. Go to **https://console.cloud.google.com** → create or select a project (top
+   bar project picker → **New Project**).
+2. **APIs & Services → OAuth consent screen:**
+   - User type: **External** (or **Internal** if everyone is in your Google
+     Workspace) → **Create**.
+   - Fill **App name**, **User support email**, and **Developer contact email**.
+     Save and continue through the Scopes step (no extra scopes needed — basic
+     `openid`/`email`/`profile` are enough) and the Summary step.
+   - If the app stays in **Testing** mode, open **Audience / Test users** and add
+     every email you'll put in `ADMIN_GOOGLE_EMAILS` — only test users can log in
+     until the app is **Published**. (Publishing is optional for an internal
+     admin tool.)
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID:**
+   - Application type: **Web application**.
+   - Name: e.g. `RQFC admin portal`.
+   - **Authorized JavaScript origins:** you'll add `BACKEND_URL` here in §3 once
+     Railway gives you the domain. (Leave it empty for now, or add it later — the
+     portal login won't work until this origin is present.)
+   - **Authorized redirect URIs:** leave blank — Google Identity Services uses the
+     token flow, not a redirect.
+   - **Create**, then copy the **Client ID** (looks like
+     `xx…apps.googleusercontent.com`). This is `GOOGLE_OAUTH_CLIENT_ID`.
+4. Decide which Google emails are admins — that comma-separated list is
+   `ADMIN_GOOGLE_EMAILS` (each must also be a Test user from step 2 if the consent
+   screen is still in Testing mode).
+
+---
+
+## 3. Backend — Railway
 `backend/railway.toml` already declares the Nixpacks build, the start command
 (`uvicorn app.main:app --host 0.0.0.0 --port $PORT`), and the `/` healthcheck — so
 the only manual work is the root directory and env vars.
@@ -64,15 +99,16 @@ the only manual work is the root directory and env vars.
    | `SUPABASE_ANON_KEY` | from §1 (used for trader email/password login) |
    | `ALPACA_API_KEY` / `ALPACA_API_SECRET` | paper keys (fallback account for pods without their own) |
    | `ALPACA_TRADING_BASE_URL` | `https://paper-api.alpaca.markets` |
-   | `GOOGLE_OAUTH_CLIENT_ID` | your Google OAuth Web client id |
-   | `ADMIN_GOOGLE_EMAILS` | comma-separated admin emails allowed into the portal |
+   | `GOOGLE_OAUTH_CLIENT_ID` | the client id from §2 |
+   | `ADMIN_GOOGLE_EMAILS` | comma-separated admin emails from §2 |
    | `ADMIN_PORTAL_SECRET` | any long random string |
-   | `CORS_ORIGINS` | leave unset for now; set in §3 once you know the Pages URL |
+   | `CORS_ORIGINS` | leave unset for now; set in §4 once you know the Pages URL |
 
-5. In **Google Cloud Console → your OAuth Web client → Authorized JavaScript
-   origins**, add `BACKEND_URL`. The admin portal page is served *from the
-   backend* at `BACKEND_URL/portal`, so the origin Google checks is the backend's,
-   **not** the Pages URL.
+5. **Finish the Google OAuth setup from §2:** in **Google Cloud Console → your
+   OAuth Web client → Authorized JavaScript origins**, add `BACKEND_URL` and save.
+   The portal page is served *from the backend* at `BACKEND_URL/portal`, so the
+   origin Google checks is the backend's, **not** the Pages URL. (Changes can take
+   a few minutes to propagate.)
 6. Verify the deploy:
    ```bash
    curl https://BACKEND_URL/                      # landing page / health → 200
@@ -81,14 +117,14 @@ the only manual work is the root directory and env vars.
 
 ---
 
-## 3. App — GitHub Pages
+## 4. App — GitHub Pages
 The workflow `.github/workflows/deploy.yml` builds on every push to `main` that
 touches `app/**` and adds the SPA `404.html` fallback. `vite.config.ts` sets
 `base: '/fund/'`, so the site lands at `https://<user>.github.io/fund/`.
 
 1. Repo → **Settings → Pages → Source = GitHub Actions**.
 2. Repo → **Settings → Secrets and variables → Actions → New repository secret**:
-   `VITE_BACKEND_URL = BACKEND_URL` (the Railway URL from §2). This is baked into
+   `VITE_BACKEND_URL = BACKEND_URL` (the Railway URL from §3). This is baked into
    the bundle at build time.
 3. Trigger a build: push any change under `app/**`, or **Actions → Deploy to
    GitHub Pages → Run workflow**.
@@ -99,7 +135,7 @@ touches `app/**` and adds the SPA `404.html` fallback. `vite.config.ts` sets
 
 ---
 
-## 4. Package — PyPI
+## 5. Package — PyPI
 Two one-time fixes before the first publish (both are real blockers today):
 
 1. **Pin the backend URL** in `package/rqfc/__init__.py` so traders need zero
@@ -125,10 +161,10 @@ PyPI rejects re-uploading the same version.
 
 ---
 
-## 5. Admin portal — create pods, accounts, assignments
-Open `https://BACKEND_URL/portal` and sign in with an allowlisted Google account.
-The backend verifies the Google ID token using `GOOGLE_OAUTH_CLIENT_ID` and only
-issues a portal token if the email is in `ADMIN_GOOGLE_EMAILS`.
+## 6. Admin portal — create pods, accounts, assignments
+Open `https://BACKEND_URL/portal` and sign in with an allowlisted Google account
+(must be in `ADMIN_GOOGLE_EMAILS`, and a Test user if the consent screen from §2
+is still in Testing mode).
 
 1. **Pods** → create a pod (e.g. "Prod Test", equities, capital 100000). Leave the
    Alpaca fields blank to use the backend's `ALPACA_*` fallback account, or paste
@@ -139,13 +175,13 @@ issues a portal token if the email is in `ADMIN_GOOGLE_EMAILS`.
 
 ---
 
-## 6. End-to-end test (live system)
+## 7. End-to-end test (live system)
 1. **Backend up:** `curl https://BACKEND_URL/public/leaderboard` → `200`.
 2. **Install the published client** in a clean environment:
    ```bash
-   pip install <name>                 # the PyPI name from §4 — no RQFC_BACKEND_URL
+   pip install <name>                 # the PyPI name from §5 — no RQFC_BACKEND_URL
    ```                                # needed, since DEFAULT_BACKEND_URL is pinned
-3. **Trade as the trader** you created in §5:
+3. **Trade as the trader** you created in §6:
    ```python
    import rqfc
    rqfc.login("trader@example.com", "the-password-you-set")
@@ -161,8 +197,9 @@ issues a portal token if the email is in `ADMIN_GOOGLE_EMAILS`.
 
 ## Done checklist
 - [ ] All five SQL files applied in Supabase
+- [ ] Google OAuth Web client created; client id + admin emails recorded
 - [ ] `curl BACKEND_URL/public/leaderboard` returns 200 from Railway
-- [ ] Google admin login works at `BACKEND_URL/portal`
+- [ ] `BACKEND_URL` added to the OAuth client's authorized origins; portal login works
 - [ ] Dashboard loads over HTTPS and polls `BACKEND_URL/public/*`
 - [ ] `CORS_ORIGINS` is locked to the Pages origin
 - [ ] `pip install <name>` from PyPI works with no `RQFC_BACKEND_URL` set

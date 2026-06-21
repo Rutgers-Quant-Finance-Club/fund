@@ -42,8 +42,8 @@ jobs:
         run: npm run build
         env:
           # Where the FastAPI backend (public feeds + admin portal) is hosted.
-          # Override with a VITE_BACKEND_URL repo secret; otherwise defaults to Render.
-          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL || 'https://fund-tkb1.onrender.com' }}
+          # Override with a VITE_BACKEND_URL repo secret; otherwise defaults to Railway.
+          VITE_BACKEND_URL: ${{ secrets.VITE_BACKEND_URL || 'https://rqfc-fund-portal.up.railway.app' }}
 
       - name: Add SPA fallback
         run: cp dist/index.html dist/404.html

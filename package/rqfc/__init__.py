@@ -29,8 +29,8 @@ from ._session import Session
 from .client import Account
 from .admin import Admin
 
-__version__ = "1.0.0"
-DEFAULT_BACKEND_URL = "https://fund-tkb1.onrender.com"
+__version__ = "1.1.0"
+DEFAULT_BACKEND_URL = "https://rqfc-fund-portal.up.railway.app"
 
 _session: Session | None = None
 
